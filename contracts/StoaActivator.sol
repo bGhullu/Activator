@@ -14,8 +14,8 @@ contract StoaActivator {
         uint256 amount;
     }
 
-    event DepositRequest(address user, address synToken, uint256 amount);
-    event Withdraw(address user, address synToken, uint256 amount);
+    event Deposit(address user, uint256 amount);
+    event Withdraw(address user, uint256 amount);
 
     address private immutable i_synToken;
     address private immutable i_underlying;
@@ -37,7 +37,7 @@ contract StoaActivator {
             amount
         );
         depositToStoaActivator.push(depositAsset);
-        emit DepositRequest(msg.sender, amount);
+        emit Deposit(msg.sender, amount);
     }
 
     function withdraw(uint256 amount) external {
