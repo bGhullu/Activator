@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: MIT
+
 pragma solidity ^0.8.13;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import "./interfaces/IERC20Burnable.sol";
+import "../interfaces/IERC20Burnable.sol";
 
 /// @title  TokenUtils
 /// @author Forked From https://github.com/alchemix-finance/v2-foundry/blob/master/src/libraries/TokenUtils.sol

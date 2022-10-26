@@ -2,45 +2,50 @@
 
 pragma solidity ^0.8.7;
 
-import "openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ReentrancyGuardUpgradeable} from "@openzeppelin-contracts-upgradeable/contracts/security/ReentrancyGuardUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "./libraries/TokenUtils.sol";
-import "./interfaces/IERC20Burnable.sol";
-import "./bsae/Error.sol";
+import "./base/Error.sol";
 
 /// @title StoaActivator
-///
+/// @author Stoa
 /// @notice A contract which facilitates the exchange of synthetic assets for their underlying
 //          asset. This contract guarantees that synthetic assets are exchanged exactly 1:1
 //          for the underlying asset.
 
-contract StoaActivator is ReentrancyGuardUpgradeable{
-
-
+contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     struct DepositSyntheticAsset {
-        address depositer;
+        address user;
         uint256 amount;
+        uint256 claimed;
+        uint256 unclaimed;
     }
 
-    struct AccountStatus{
-        address owner;
-        uint256 exchanged;
-        uint256 unexchanged;
-    }
+    /// @notice Emitted when the system is paused or unpaused.
+    ///
+    /// @param flag `true` if the system has been paused, `false` otherwise.
+    event Paused(bool flag);
 
     event Deposit(address user, uint256 amount);
 
     event Withdraw(address user, uint256 amount);
 
-    /// @dev the synthetic token to be transmuted
-    address private immutable i_syntheticToken;
+    /// @dev The identifier of the role which maintains other roles.
+    bytes32 public constant ADMIN = keccak256("ADMIN");
+
+    /// @dev The identifier of the sentinel role
+    bytes32 public constant SENTINEL = keccak256("SENTINEL");
+
+    /// @dev the synthetic token to be exchanged
+    address public syntheticToken;
 
     /// @dev the underlyinToken token to be received
-    address private immutable i_underlyinToken;
+    address public underlyingToken;
 
     /// @dev The amount of decimal places needed to normalize collateral to debtToken
-     uint256 public override conversionFactor;
-    
+    uint256 public conversionFactor;
+
     /// @dev contract pause state
     bool public isPaused;
 
@@ -48,40 +53,36 @@ contract StoaActivator is ReentrancyGuardUpgradeable{
 
     constructor() {}
 
-
-    function initialize(
-        address _syntheticToken,
-        address _underlyingToken,
-    ) external initializer {
+    function initialize(address _syntheticToken, address _underlyingToken) external initializer {
         _setupRole(ADMIN, msg.sender);
         _setRoleAdmin(ADMIN, ADMIN);
         _setRoleAdmin(SENTINEL, ADMIN);
-        i_syntheticToken = _syntheticToken;
-        i_underlyingToken = _underlyingToken;
-        uint8 debtTokenDecimals = TokenUtils.expectDecimals(i_syntheticToken);
-        uint8 underlyingTokenDecimals = TokenUtils.expectDecimals(i_underlyingToken);
+        syntheticToken = _syntheticToken;
+        underlyingToken = _underlyingToken;
+        uint8 debtTokenDecimals = TokenUtils.expectDecimals(syntheticToken);
+        uint8 underlyingTokenDecimals = TokenUtils.expectDecimals(underlyingToken);
         conversionFactor = 10**(debtTokenDecimals - underlyingTokenDecimals);
         isPaused = false;
     }
 
     /// @dev A modifier which checks if caller is a sentinel or admin.
     modifier onlySentinelOrAdmin() {
-         if (!hasRole(SENTINEL, msg.sender) && !hasRole(ADMIN, msg.sender)) {
-        revert StoaActivator__Unauthorized();
+        if (!hasRole(SENTINEL, msg.sender) && !hasRole(ADMIN, msg.sender)) {
+            revert StoaActivator__Unauthorized();
         }
         _;
     }
 
     function _onlyAdmin() internal view {
         if (!hasRole(ADMIN, msg.sender)) {
-        revert StoaActivator__Unauthorized();
+            revert StoaActivator__Unauthorized();
         }
     }
 
     /// @dev A modifier which checks whether the Activator is unpaused.
     modifier notPaused() {
         if (isPaused) {
-        revert IllegalState();
+            revert IllegalState();
         }
         _;
     }
@@ -91,43 +92,60 @@ contract StoaActivator is ReentrancyGuardUpgradeable{
         emit Paused(isPaused);
     }
 
-    function deposit(uint256 amount) external nonReentrant{
+    function deposit(uint256 amount) external nonReentrant {
         if (amount == 0) {
             revert StoaActivator__NotAllowedZeroValue();
         }
         TokenUtils.safeTransferFrom(syntheticToken, msg.sender, address(this), amount);
-        DepositSyntheticAsset memory depositAsset = DepositSyntheticAsset(
-            msg.sender,
-            amount
-        );
+        DepositSyntheticAsset memory depositAsset = DepositSyntheticAsset(msg.sender, amount, 0, 0);
         depositToStoaActivator.push(depositAsset);
         emit Deposit(msg.sender, amount);
     }
 
-    function checkClaimer()internal {
-         DepositSyntheticAsset[]
-            memory _depositSyntheticAsset = depositToStoaActivator;
-        for (uint i = 0; i < _depositSyntheticAsset.length; i++) {
-            if (!_depositSyntheticAsset[i].depositer == msg.sender) {
+    function withdraw(uint256 amount) external nonReentrant {
+        uint256 index = _validUser(amount);
+        TokenUtils.safeTransfer(syntheticToken, msg.sender, amount);
+        uint256 remainingAmount = depositToStoaActivator[index].amount - amount;
+        depositToStoaActivator[index].amount = remainingAmount;
+        checkUserStatus(remainingAmount, index);
+        TokenUtils.safeTransfer(syntheticToken, msg.sender, amount);
+        emit Withdraw(msg.sender, amount);
+    }
+
+    function claim(uint256 amount) external nonReentrant {
+        uint256 index = _validUser(amount);
+        uint256 remainingAmount = depositToStoaActivator[index].amount - amount;
+        depositToStoaActivator[index].claimed = amount;
+        depositToStoaActivator[index].unclaimed = remainingAmount;
+        depositToStoaActivator[index].amount = remainingAmount;
+        checkUserStatus(remainingAmount, index);
+        TokenUtils.safeTransfer(underlyingToken, msg.sender, amount);
+        TokenUtils.safeBurn(syntheticToken, _normalizeUnderlyinTokensToDebt(amount));
+    }
+
+    function _validUser(uint256 amount) internal view returns (uint256) {
+        uint256 index;
+        DepositSyntheticAsset[] memory _depositSyntheticAsset = depositToStoaActivator;
+        for (uint256 i = 0; i < _depositSyntheticAsset.length; i++) {
+            if (_depositSyntheticAsset[i].user != msg.sender) {
                 revert StoaActivator__Unauthorized();
             }
-            uint index = i;
+            index = i;
+
             if (_depositSyntheticAsset[index].amount < amount) {
                 revert StoaActivator__NotValidAmount();
             }
-    }
-
-    function withdraw(uint256 amount) external nonReentrant {
-            checkClaimer();
-            TokenUtils.safeTransfer(syntheticToken, recipient, amount);
-            emit Withdraw(msg.sender, syntheticToken, amount);
         }
+        return index;
     }
 
-    function claim(uint256 amount) external{
-            checkClaimer();
-            IERC20(i_underlyinToken).transfer(address(this), msg.sender,amount);
-            TokenUtils.safeBurn(syntheticToken, _normalizeunderlyinTokenTokensToDebt(amount));
+    function checkUserStatus(uint256 remainingAmount, uint256 index) internal {
+        if (remainingAmount == 0) {
+            depositToStoaActivator[index] = depositToStoaActivator[
+                depositToStoaActivator.length - 1
+            ];
+            depositToStoaActivator.pop();
+        }
     }
 
     /// @dev Normalize `amount` of `underlyingToken` to a value which is comparable to units of the debt token.
@@ -136,8 +154,7 @@ contract StoaActivator is ReentrancyGuardUpgradeable{
     ///
     /// @return The normalized amount.
 
-    function _normalizeUnderlyingTokensToDebt(uint256 amount) internal view returns (uint256) {
-    return amount * conversionFactor;
+    function _normalizeUnderlyinTokensToDebt(uint256 amount) internal view returns (uint256) {
+        return amount * conversionFactor;
     }
-
 }
