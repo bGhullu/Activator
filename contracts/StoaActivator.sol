@@ -21,6 +21,7 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
         address user;
         uint256 unclaimedAmount;
         uint256 claimedAmount;
+        uint256 timestamp;
     }
 
     /**
