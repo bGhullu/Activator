@@ -40,19 +40,11 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
      */
     event Paused(bool flag);
 
-    event Deposit(address indexed user, uint256 unexchangedBalanceBalance);
+    event Deposit(address indexed user, uint256 unexchangedBalance);
 
-    event Withdraw(
-        address indexed user,
-        uint256 unexchangedBalanceBalance,
-        uint256 exchangedBalanceBalance
-    );
+    event Withdraw(address indexed user, uint256 unexchangedBalance, uint256 exchangedBalance);
 
-    event Claim(
-        address indexed user,
-        uint256 unexchangedBalanceBalance,
-        uint256 exchangedBalanceBalance
-    );
+    event Claim(address indexed user, uint256 unexchangedBalance, uint256 exchangedBalance);
 
     // @dev The identifier of the role which maintains other roles.
     bytes32 public constant ADMIN = keccak256("ADMIN");
