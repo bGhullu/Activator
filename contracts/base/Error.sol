@@ -19,3 +19,5 @@ error StoaActivator__InvalidAmount();
  * or entered an illegal condition which is not recoverable from.
  */
 error IllegalState();
+
+error IllegalArgument();

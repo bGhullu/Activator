@@ -7,21 +7,31 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/se
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "./libraries/TokenUtils.sol";
 import "./base/Error.sol";
+import "./libraries/SafeCast.sol";
 
 /**
  * @title StoaActivator
  * @author Stoa
  * @notice A contract which facilitates the exchange of synthetic assets for their underlying
- * asset. This contract guarantees that synthetic assets are exchanged exactly 1:1
+ * asset. This contract guarantees that synthetic assets are exchangedBalance exactly 1:1
  * for the underlying asset.
  */
 
 contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
-    struct DepositSyntheticAsset {
+    struct Account {
+        // The total number of unexchangedBalance tokens that an account has deposited into the system
+        uint256 unexchangedBalance;
+        // The total number of exchangedBalance tokens that an account has had credited
+        uint256 exchangedBalance;
+    }
+
+    struct UpdateAccount {
+        // The owner address whose account will be modified
         address user;
-        uint256 unclaimedAmount;
-        uint256 claimedAmount;
-        uint256 timestamp;
+        // The amount to change the account's unexchangedBalance balance by
+        int256 unexchangedBalance;
+        // The amount to change the account's exchangedBalance balance by
+        int256 exchangedBalance;
     }
 
     /**
@@ -30,9 +40,19 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
      */
     event Paused(bool flag);
 
-    event Deposit(address indexed user, uint256 unclaimedAmount);
+    event Deposit(address indexed user, uint256 unexchangedBalanceBalance);
 
-    event Withdraw(address indexed user, uint256 unclaimedAmount, uint256 claimedAmount);
+    event Withdraw(
+        address indexed user,
+        uint256 unexchangedBalanceBalance,
+        uint256 exchangedBalanceBalance
+    );
+
+    event Claim(
+        address indexed user,
+        uint256 unexchangedBalanceBalance,
+        uint256 exchangedBalanceBalance
+    );
 
     // @dev The identifier of the role which maintains other roles.
     bytes32 public constant ADMIN = keccak256("ADMIN");
@@ -40,7 +60,7 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
     // @dev The identifier of the sentinel role
     bytes32 public constant SENTINEL = keccak256("SENTINEL");
 
-    // @dev the synthetic token to be exchanged
+    // @dev the synthetic token to be exchangedBalance
     address public syntheticToken;
 
     // @dev the underlyinToken token to be received
@@ -52,7 +72,9 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
     // @dev contract pause state
     bool public isPaused;
 
-    DepositSyntheticAsset[] private depositToStoaActivator;
+    mapping(address => Account) private accounts;
+
+    //DepositSyntheticAsset[] private depositToStoaActivator;
 
     constructor() {}
 
@@ -95,95 +117,59 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
         emit Paused(isPaused);
     }
 
-    function deposit(uint256 amount) external nonReentrant {
-        if (amount == 0) {
-            revert StoaActivator__NotAllowedZeroValue();
-        }
+    function deposit(uint256 amount) external {
+        _updateAccount(
+            UpdateAccount({
+                user: msg.sender,
+                unexchangedBalance: SafeCast.toInt256(amount),
+                exchangedBalance: 0
+            })
+        );
         TokenUtils.safeTransferFrom(syntheticToken, msg.sender, address(this), amount);
-        _existingUser(msg.sender, amount);
         emit Deposit(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) external nonReentrant {
-        uint256 index = _validUser(msg.sender, amount);
+    function withdraw(uint256 amount) external {
+        _updateAccount(
+            UpdateAccount({
+                user: msg.sender,
+                unexchangedBalance: -SafeCast.toInt256(amount),
+                exchangedBalance: 0
+            })
+        );
         TokenUtils.safeTransfer(syntheticToken, msg.sender, amount);
-        uint256 _unclaimedAmount = depositToStoaActivator[index].unclaimedAmount - amount;
-        depositToStoaActivator[index].unclaimedAmount = _unclaimedAmount;
-        _removeUser(_unclaimedAmount, index);
-        TokenUtils.safeTransfer(syntheticToken, msg.sender, amount);
-        emit Withdraw(msg.sender, _unclaimedAmount, amount);
+        emit Withdraw(
+            msg.sender,
+            accounts[msg.sender].unexchangedBalance,
+            accounts[msg.sender].exchangedBalance
+        );
     }
 
-    function claim(uint256 amount) external nonReentrant {
-        uint256 index = _validUser(msg.sender, amount);
-        uint256 _unclaimedAmount = depositToStoaActivator[index].unclaimedAmount - amount;
-        depositToStoaActivator[index].claimedAmount = amount;
-        depositToStoaActivator[index].unclaimedAmount = _unclaimedAmount;
-        _removeUser(_unclaimedAmount, index);
+    function claim(uint256 amount) external {
+        _updateAccount(
+            UpdateAccount({
+                user: msg.sender,
+                unexchangedBalance: -SafeCast.toInt256(amount),
+                exchangedBalance: SafeCast.toInt256(amount)
+            })
+        );
         TokenUtils.safeTransfer(underlyingToken, msg.sender, amount);
-        TokenUtils.safeBurn(syntheticToken, _normalizeUnderlyinTokensToDebt(amount));
+        TokenUtils.safeBurn(syntheticToken, amount);
+        emit Claim(
+            msg.sender,
+            accounts[msg.sender].unexchangedBalance,
+            accounts[msg.sender].exchangedBalance
+        );
     }
 
-    /**
-     * @dev Checks the msg.sender is valid user.
-     * @notice Reverts if msg.sender is not.
-     */
-
-    function _validUser(address _user, uint256 amount) internal view returns (uint256) {
-        uint256 index;
-        DepositSyntheticAsset[] memory _depositSyntheticAsset = depositToStoaActivator;
-        for (uint256 i = 0; i < _depositSyntheticAsset.length; i++) {
-            if (_depositSyntheticAsset[i].user != _user) {
-                revert StoaActivator__Unauthorized();
-            }
-            index = i;
-
-            if (_depositSyntheticAsset[index].unclaimedAmount < amount) {
-                revert StoaActivator__InvalidAmount();
-            }
+    function _updateAccount(UpdateAccount memory param) internal {
+        Account storage _account = accounts[param.user];
+        int256 updateUnexchange = int256(_account.unexchangedBalance) + param.unexchangedBalance;
+        int256 updateExchange = int256(_account.exchangedBalance) + param.exchangedBalance;
+        if (updateUnexchange < 0 || updateExchange < 0) {
+            revert IllegalState();
         }
-        return index;
-    }
-
-    /**
-     * @dev Checks if the msg.sender is existing Activator.
-     * @notice Update the balance if it is else create a new index for the user.
-     */
-
-    function _existingUser(address _user, uint256 amount) internal {
-        DepositSyntheticAsset[] memory _depositSyntheticAsset = depositToStoaActivator;
-        for (uint256 i = 0; i < _depositSyntheticAsset.length; i++) {
-            if (_depositSyntheticAsset[i].user == _user) {
-                uint256 updatedUnclaimedAmount = depositToStoaActivator[i].unclaimedAmount + amount;
-                depositToStoaActivator[i].unclaimedAmount = updatedUnclaimedAmount;
-            } else {
-                DepositSyntheticAsset memory depositAsset = DepositSyntheticAsset(_user, amount, 0);
-                depositToStoaActivator.push(depositAsset);
-            }
-        }
-    }
-
-    /**
-     * @dev Checks the whitelist for msg.sender.
-     * @notice Reverts if msg.sender is not in the whitelist.
-     */
-
-    function _removeUser(uint256 unclaimedAmount, uint256 index) internal {
-        if (unclaimedAmount == 0) {
-            depositToStoaActivator[index] = depositToStoaActivator[
-                depositToStoaActivator.length - 1
-            ];
-            depositToStoaActivator.pop();
-        }
-    }
-
-    /**
-     * @dev Normalize `amount` of `underlyingToken` to a value which is comparable to units of the debt token.
-     * @param amount The amount of the debt token.
-     * @return The normalized amount.
-     */
-
-    function _normalizeUnderlyinTokensToDebt(uint256 amount) internal view returns (uint256) {
-        return amount * conversionFactor;
+        _account.unexchangedBalance = uint256(updateUnexchange);
+        _account.exchangedBalance = uint256(updateExchange);
     }
 }
