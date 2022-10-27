@@ -5,7 +5,7 @@ pragma solidity >=0.5.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title  IERC20Burnable
-/// @author Alchemix Finance
+/// @author Forked from https://github.com/alchemix-finance/v2-foundry/blob/master/src/interfaces/IERC20Burnable.sol
 interface IERC20Burnable is IERC20 {
     /// @notice Burns `amount` tokens from the balance of `msg.sender`.
     ///

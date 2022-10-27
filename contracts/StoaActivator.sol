@@ -8,45 +8,47 @@ import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/acce
 import "./libraries/TokenUtils.sol";
 import "./base/Error.sol";
 
-/// @title StoaActivator
-/// @author Stoa
-/// @notice A contract which facilitates the exchange of synthetic assets for their underlying
-//          asset. This contract guarantees that synthetic assets are exchanged exactly 1:1
-//          for the underlying asset.
+/**
+ * @title StoaActivator
+ * @author Stoa
+ * @notice A contract which facilitates the exchange of synthetic assets for their underlying
+ * asset. This contract guarantees that synthetic assets are exchanged exactly 1:1
+ * for the underlying asset.
+ */
 
 contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     struct DepositSyntheticAsset {
         address user;
-        uint256 amount;
-        uint256 claimed;
-        uint256 unclaimed;
+        uint256 unclaimedAmount;
+        uint256 claimedAmount;
     }
 
-    /// @notice Emitted when the system is paused or unpaused.
-    ///
-    /// @param flag `true` if the system has been paused, `false` otherwise.
+    /**
+     * @notice Emitted when the system is paused or unpaused.
+     * @param flag `true` if the system has been paused, `false` otherwise.
+     */
     event Paused(bool flag);
 
-    event Deposit(address user, uint256 amount);
+    event Deposit(address indexed user, uint256 unclaimedAmount);
 
-    event Withdraw(address user, uint256 amount);
+    event Withdraw(address indexed user, uint256 unclaimedAmount, uint256 claimedAmount);
 
-    /// @dev The identifier of the role which maintains other roles.
+    // @dev The identifier of the role which maintains other roles.
     bytes32 public constant ADMIN = keccak256("ADMIN");
 
-    /// @dev The identifier of the sentinel role
+    // @dev The identifier of the sentinel role
     bytes32 public constant SENTINEL = keccak256("SENTINEL");
 
-    /// @dev the synthetic token to be exchanged
+    // @dev the synthetic token to be exchanged
     address public syntheticToken;
 
-    /// @dev the underlyinToken token to be received
+    // @dev the underlyinToken token to be received
     address public underlyingToken;
 
-    /// @dev The amount of decimal places needed to normalize collateral to debtToken
+    // @dev The amount of decimal places needed to normalize collateral to debtToken
     uint256 public conversionFactor;
 
-    /// @dev contract pause state
+    // @dev contract pause state
     bool public isPaused;
 
     DepositSyntheticAsset[] private depositToStoaActivator;
@@ -65,7 +67,7 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
         isPaused = false;
     }
 
-    /// @dev A modifier which checks if caller is a sentinel or admin.
+    //@dev A modifier which checks if caller is a sentinel or admin.
     modifier onlySentinelOrAdmin() {
         if (!hasRole(SENTINEL, msg.sender) && !hasRole(ADMIN, msg.sender)) {
             revert StoaActivator__Unauthorized();
@@ -79,7 +81,7 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
         }
     }
 
-    /// @dev A modifier which checks whether the Activator is unpaused.
+    // @dev A modifier which checks whether the Activator is unpaused.
     modifier notPaused() {
         if (isPaused) {
             revert IllegalState();
@@ -97,50 +99,76 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
             revert StoaActivator__NotAllowedZeroValue();
         }
         TokenUtils.safeTransferFrom(syntheticToken, msg.sender, address(this), amount);
-        DepositSyntheticAsset memory depositAsset = DepositSyntheticAsset(msg.sender, amount, 0, 0);
-        depositToStoaActivator.push(depositAsset);
+        _existingUser(msg.sender, amount);
         emit Deposit(msg.sender, amount);
     }
 
     function withdraw(uint256 amount) external nonReentrant {
-        uint256 index = _validUser(amount);
+        uint256 index = _validUser(msg.sender, amount);
         TokenUtils.safeTransfer(syntheticToken, msg.sender, amount);
-        uint256 remainingAmount = depositToStoaActivator[index].amount - amount;
-        depositToStoaActivator[index].amount = remainingAmount;
-        checkUserStatus(remainingAmount, index);
+        uint256 _unclaimedAmount = depositToStoaActivator[index].unclaimedAmount - amount;
+        depositToStoaActivator[index].unclaimedAmount = _unclaimedAmount;
+        _removeUser(_unclaimedAmount, index);
         TokenUtils.safeTransfer(syntheticToken, msg.sender, amount);
-        emit Withdraw(msg.sender, amount);
+        emit Withdraw(msg.sender, _unclaimedAmount, amount);
     }
 
     function claim(uint256 amount) external nonReentrant {
-        uint256 index = _validUser(amount);
-        uint256 remainingAmount = depositToStoaActivator[index].amount - amount;
-        depositToStoaActivator[index].claimed = amount;
-        depositToStoaActivator[index].unclaimed = remainingAmount;
-        depositToStoaActivator[index].amount = remainingAmount;
-        checkUserStatus(remainingAmount, index);
+        uint256 index = _validUser(msg.sender, amount);
+        uint256 _unclaimedAmount = depositToStoaActivator[index].unclaimedAmount - amount;
+        depositToStoaActivator[index].claimedAmount = amount;
+        depositToStoaActivator[index].unclaimedAmount = _unclaimedAmount;
+        _removeUser(_unclaimedAmount, index);
         TokenUtils.safeTransfer(underlyingToken, msg.sender, amount);
         TokenUtils.safeBurn(syntheticToken, _normalizeUnderlyinTokensToDebt(amount));
     }
 
-    function _validUser(uint256 amount) internal view returns (uint256) {
+    /**
+     * @dev Checks the msg.sender is valid user.
+     * @notice Reverts if msg.sender is not.
+     */
+
+    function _validUser(address _user, uint256 amount) internal view returns (uint256) {
         uint256 index;
         DepositSyntheticAsset[] memory _depositSyntheticAsset = depositToStoaActivator;
         for (uint256 i = 0; i < _depositSyntheticAsset.length; i++) {
-            if (_depositSyntheticAsset[i].user != msg.sender) {
+            if (_depositSyntheticAsset[i].user != _user) {
                 revert StoaActivator__Unauthorized();
             }
             index = i;
 
-            if (_depositSyntheticAsset[index].amount < amount) {
-                revert StoaActivator__NotValidAmount();
+            if (_depositSyntheticAsset[index].unclaimedAmount < amount) {
+                revert StoaActivator__InvalidAmount();
             }
         }
         return index;
     }
 
-    function checkUserStatus(uint256 remainingAmount, uint256 index) internal {
-        if (remainingAmount == 0) {
+    /**
+     * @dev Checks if the msg.sender is existing Activator.
+     * @notice Update the balance if it is else create a new index for the user.
+     */
+
+    function _existingUser(address _user, uint256 amount) internal {
+        DepositSyntheticAsset[] memory _depositSyntheticAsset = depositToStoaActivator;
+        for (uint256 i = 0; i < _depositSyntheticAsset.length; i++) {
+            if (_depositSyntheticAsset[i].user == _user) {
+                uint256 updatedUnclaimedAmount = depositToStoaActivator[i].unclaimedAmount + amount;
+                depositToStoaActivator[i].unclaimedAmount = updatedUnclaimedAmount;
+            } else {
+                DepositSyntheticAsset memory depositAsset = DepositSyntheticAsset(_user, amount, 0);
+                depositToStoaActivator.push(depositAsset);
+            }
+        }
+    }
+
+    /**
+     * @dev Checks the whitelist for msg.sender.
+     * @notice Reverts if msg.sender is not in the whitelist.
+     */
+
+    function _removeUser(uint256 unclaimedAmount, uint256 index) internal {
+        if (unclaimedAmount == 0) {
             depositToStoaActivator[index] = depositToStoaActivator[
                 depositToStoaActivator.length - 1
             ];
@@ -148,11 +176,11 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
         }
     }
 
-    /// @dev Normalize `amount` of `underlyingToken` to a value which is comparable to units of the debt token.
-    ///
-    /// @param amount The amount of the debt token.
-    ///
-    /// @return The normalized amount.
+    /**
+     * @dev Normalize `amount` of `underlyingToken` to a value which is comparable to units of the debt token.
+     * @param amount The amount of the debt token.
+     * @return The normalized amount.
+     */
 
     function _normalizeUnderlyinTokensToDebt(uint256 amount) internal view returns (uint256) {
         return amount * conversionFactor;
