@@ -13,24 +13,24 @@ import "./libraries/SafeCast.sol";
  * @title StoaActivator
  * @author Stoa
  * @notice A contract which facilitates the exchange of synthetic assets for their underlying
- * asset. This contract guarantees that synthetic assets are exchangedBalance exactly 1:1
+ * asset. This contract guarantees that synthetic assets are exchanged exactly 1:1
  * for the underlying asset.
  */
 
 contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     struct Account {
-        // The total number of unexchangedBalance tokens that an account has deposited into the system
+        // The total number of unexchanged tokens that an account has deposited into the system
         uint256 unexchangedBalance;
-        // The total number of exchangedBalance tokens that an account has had credited
+        // The total number of exchanged tokens that an account has had credited
         uint256 exchangedBalance;
     }
 
     struct UpdateAccount {
         // The owner address whose account will be modified
         address user;
-        // The amount to change the account's unexchangedBalance balance by
+        // The amount to change the account's unexchanged balance by
         int256 unexchangedBalance;
-        // The amount to change the account's exchangedBalance balance by
+        // The amount to change the account's exchanged balance by
         int256 exchangedBalance;
     }
 
@@ -52,7 +52,7 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
     // @dev The identifier of the sentinel role
     bytes32 public constant SENTINEL = keccak256("SENTINEL");
 
-    // @dev the synthetic token to be exchangedBalance
+    // @dev the synthetic token to be exchanged
     address public syntheticToken;
 
     // @dev the underlyinToken token to be received
@@ -65,8 +65,6 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
     bool public isPaused;
 
     mapping(address => Account) private accounts;
-
-    //DepositSyntheticAsset[] private depositToStoaActivator;
 
     constructor() {}
 
