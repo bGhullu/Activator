@@ -74,9 +74,6 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
         _setRoleAdmin(SENTINEL, ADMIN);
         syntheticToken = _syntheticToken;
         underlyingToken = _underlyingToken;
-        uint8 debtTokenDecimals = TokenUtils.expectDecimals(syntheticToken);
-        uint8 underlyingTokenDecimals = TokenUtils.expectDecimals(underlyingToken);
-        conversionFactor = 10**(debtTokenDecimals - underlyingTokenDecimals);
         isPaused = false;
     }
 
