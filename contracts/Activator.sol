@@ -10,14 +10,13 @@ import "./base/Error.sol";
 import "./libraries/SafeCast.sol";
 
 /**
- * @title StoaActivator
- * @author Stoa
+ * @title Activator
  * @notice A contract which facilitates the exchange of synthetic assets for their underlying
  * asset. This contract guarantees that synthetic assets are exchanged exactly 1:1
  * for the underlying asset.
  */
 
-contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
+contract Activator is Initializable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     struct Account {
         // The total number of unexchanged tokens that an account has deposited into the system
         uint256 unexchangedBalance;
@@ -80,14 +79,14 @@ contract StoaActivator is Initializable, AccessControlUpgradeable, ReentrancyGua
     //@dev A modifier which checks if caller is a sentinel or admin.
     modifier onlySentinelOrAdmin() {
         if (!hasRole(SENTINEL, msg.sender) && !hasRole(ADMIN, msg.sender)) {
-            revert StoaActivator__Unauthorized();
+            revert Activator__Unauthorized();
         }
         _;
     }
 
     function _onlyAdmin() internal view {
         if (!hasRole(ADMIN, msg.sender)) {
-            revert StoaActivator__Unauthorized();
+            revert Activator__Unauthorized();
         }
     }
 
